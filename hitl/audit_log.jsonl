@@ -1,0 +1,18 @@
+{"ts": "2026-05-11T08:43:45.891169+00:00", "incident": "incident-1.log", "step": 1, "action": "Check auth-svc pod status: kubectl get pods -l app=auth-svc", "type": "READ_ONLY", "decision": "AUTO"}
+{"ts": "2026-05-11T08:43:45.891764+00:00", "incident": "incident-1.log", "step": 2, "action": "Review OOM events: kubectl describe pod auth-svc-7d9f", "type": "READ_ONLY", "decision": "AUTO"}
+{"ts": "2026-05-11T08:43:45.892715+00:00", "incident": "incident-1.log", "step": 3, "action": "Increase auth-svc memory limit from 512Mi to 1Gi in deployment.yaml", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.893550+00:00", "incident": "incident-1.log", "step": 4, "action": "Apply updated deployment: kubectl apply -f auth-svc-deployment.yaml", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.894350+00:00", "incident": "incident-1.log", "step": 5, "action": "Enable heap dump on OOM: -XX:+HeapDumpOnOutOfMemoryError", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.894595+00:00", "incident": "incident-1.log", "step": 6, "action": "Monitor pod restart count for next 10 minutes", "type": "READ_ONLY", "decision": "AUTO"}
+{"ts": "2026-05-11T08:43:45.895064+00:00", "incident": "incident-2.log", "step": 1, "action": "Check VPC flow logs for packet loss metrics in AZ-b", "type": "READ_ONLY", "decision": "AUTO"}
+{"ts": "2026-05-11T08:43:45.895329+00:00", "incident": "incident-2.log", "step": 2, "action": "Verify target group health: 0/3 healthy in tg-api-az-b", "type": "READ_ONLY", "decision": "AUTO"}
+{"ts": "2026-05-11T08:43:45.896099+00:00", "incident": "incident-2.log", "step": 3, "action": "Reroute ALB traffic away from AZ-b to AZ-a/c", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.896861+00:00", "incident": "incident-2.log", "step": 4, "action": "Scale RDS read replicas in AZ-a and AZ-c", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.897635+00:00", "incident": "incident-2.log", "step": 5, "action": "Update Lambda VPC config to pin to AZ-a/c subnets", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.897887+00:00", "incident": "incident-2.log", "step": 6, "action": "Open AWS support ticket for AZ-b network investigation", "type": "READ_ONLY", "decision": "AUTO"}
+{"ts": "2026-05-11T08:43:45.898358+00:00", "incident": "incident-3.log", "step": 1, "action": "Check auth-svc pod status: kubectl get pods -l app=auth-svc", "type": "READ_ONLY", "decision": "AUTO"}
+{"ts": "2026-05-11T08:43:45.898601+00:00", "incident": "incident-3.log", "step": 2, "action": "Review OOM events: kubectl describe pod auth-svc-7d9f", "type": "READ_ONLY", "decision": "AUTO"}
+{"ts": "2026-05-11T08:43:45.899402+00:00", "incident": "incident-3.log", "step": 3, "action": "Increase auth-svc memory limit from 512Mi to 1Gi in deployment.yaml", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.900189+00:00", "incident": "incident-3.log", "step": 4, "action": "Apply updated deployment: kubectl apply -f auth-svc-deployment.yaml", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.900956+00:00", "incident": "incident-3.log", "step": 5, "action": "Enable heap dump on OOM: -XX:+HeapDumpOnOutOfMemoryError", "type": "MUTATING", "decision": "APPROVED"}
+{"ts": "2026-05-11T08:43:45.901176+00:00", "incident": "incident-3.log", "step": 6, "action": "Monitor pod restart count for next 10 minutes", "type": "READ_ONLY", "decision": "AUTO"}
