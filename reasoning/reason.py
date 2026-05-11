@@ -50,8 +50,10 @@ def reason(signal: dict) -> dict:
     return json.loads(response.text)
 
 def mock_reason(signal: dict) -> dict:
-    """Mock Gemini response for demo purposes."""
-    if "payment" in signal["source"]:
+    """Mock Gemini response — matches based on log content, not filename."""
+    logs_text = " ".join(l["msg"] for l in signal["logs"])
+
+    if "HikariPool" in logs_text or "JDBC" in logs_text:
         return {
             "incident_title": "DB Connection Pool Exhaustion",
             "root_cause": "HikariCP connection pool reached max capacity (50/50) due to long-running query blocking connections",
@@ -69,7 +71,7 @@ def mock_reason(signal: dict) -> dict:
             ],
             "blast_radius": ["payment-svc", "order-svc", "api-gateway"]
         }
-    elif "rds-proxy" in str(signal["logs"]):
+    elif "packet loss" in logs_text or "rds-proxy" in logs_text:
         return {
             "incident_title": "Network Packet Loss Cascade",
             "root_cause": "18% packet loss in subnet-az-b causing RDS connection timeouts and Lambda cold start failures",
@@ -87,7 +89,7 @@ def mock_reason(signal: dict) -> dict:
             ],
             "blast_radius": ["api-gateway", "rds-proxy", "lambda", "health-check"]
         }
-    else:
+    else:  # OOM / CrashLoop
         return {
             "incident_title": "OOM Kill / CrashLoopBackOff",
             "root_cause": "auth-svc Java heap exhausted (512Mi limit) causing repeated OOMKiller terminations and pod restarts",
