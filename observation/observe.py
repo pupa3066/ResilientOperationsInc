@@ -2,6 +2,7 @@
 Observation Layer — Node 1
 Ingests logs/metrics/traces and surfaces anomaly signals for the reasoning agent.
 """
+import os
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -78,10 +79,23 @@ def display(signal: dict):
     console.print(f"  [bold]Total signals:[/bold] {signal['signal_count']}  →  ready for Reasoning Layer\n")
 
 def run():
-    console.print(Panel("[bold cyan]ResilienceOps — Observation Layer[/bold cyan]\nIngesting real SRE incident signals...", box=box.HEAVY))
-    for incident in INCIDENTS:
-        signal = observe(incident)
-        display(signal)
+    use_live = os.getenv("LIVE_LOGS", "0") == "1"
+    if use_live:
+        from observation.log_reader import load_signals
+        signals = load_signals()
+        console.print(Panel("[bold cyan]ResilienceOps — Observation Layer[/bold cyan]\nReading LIVE incident logs...", box=box.HEAVY))
+        for s in signals:
+            console.print(Panel(f"[bold]{s['source']}[/bold]  signals={s['signal_count']}", style="bold white"))
+            t = Table("Time", "Service", "Level", "Message", box=box.SIMPLE, style="yellow")
+            for l in s["error_logs"][:6]:
+                t.add_row(l["time"][11:19], l["service"], l["level"], l["msg"][:70])
+            console.print(t)
+            console.print(f"  [bold]Affected services:[/bold] {', '.join(s['services'])}  →  ready for Reasoning Layer\n")
+    else:
+        console.print(Panel("[bold cyan]ResilienceOps — Observation Layer[/bold cyan]\nIngesting real SRE incident signals...", box=box.HEAVY))
+        for incident in INCIDENTS:
+            signal = observe(incident)
+            display(signal)
 
 if __name__ == "__main__":
     run()
