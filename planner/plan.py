@@ -56,42 +56,68 @@ def plan(reasoning_result: dict) -> dict:
     return json.loads(response.text)
 
 def mock_plan(reasoning_result: dict) -> dict:
-    """Mock planner for demo."""
-    title = reasoning_result["incident_title"]
-    
+    """
+    Generate a remediation plan with explicit step dependencies.
+
+    Edge case 3 — HITL rejection dependency graph:
+      Each MUTATING step declares 'depends_on': a list of step numbers that
+      must have been approved before this step can run. If a dependency was
+      rejected, the ActionAgent will block all downstream steps automatically.
+
+    Dependency rules per incident type:
+      DB pool:     step 4 depends on step 3 (can't resize pool if query not killed)
+                   step 5 depends on step 4 (can't deploy if config not updated)
+      Packet loss: step 4 depends on step 3 (can't scale replicas before reroute)
+                   step 5 depends on step 3 (can't pin Lambda before reroute)
+      OOM:         step 4 depends on step 3 (can't apply deployment before editing it)
+    """
+    title = reasoning_result.get("incident_title", "")
+
+    # Edge case 5: unknown incident — return safe investigation-only plan
+    if reasoning_result.get("_unknown"):
+        return {
+            "plan": [
+                {"step": 1, "action": "Review raw logs in incident_simulator/logs/ for all affected services", "type": "READ_ONLY", "estimated_time_min": 5, "risk": "LOW", "depends_on": []},
+                {"step": 2, "action": "Check service health dashboards and recent deployment history", "type": "READ_ONLY", "estimated_time_min": 5, "risk": "LOW", "depends_on": []},
+                {"step": 3, "action": "Escalate to on-call SRE with full log trace and this report", "type": "READ_ONLY", "estimated_time_min": 2, "risk": "LOW", "depends_on": []},
+            ]
+        }
+
     if "DB Connection" in title:
         return {
             "plan": [
-                {"step": 1, "action": "Query postgres for active connections: SELECT * FROM pg_stat_activity", "type": "READ_ONLY", "estimated_time_min": 2, "risk": "LOW"},
-                {"step": 2, "action": "Identify long-running query (pid: 2341) blocking pool", "type": "READ_ONLY", "estimated_time_min": 3, "risk": "LOW"},
-                {"step": 3, "action": "Kill blocking query: SELECT pg_terminate_backend(2341)", "type": "MUTATING", "estimated_time_min": 1, "risk": "MED"},
-                {"step": 4, "action": "Increase HikariCP pool size from 50 to 100 in payment-svc config", "type": "MUTATING", "estimated_time_min": 5, "risk": "MED"},
-                {"step": 5, "action": "Deploy updated payment-svc with new pool config", "type": "MUTATING", "estimated_time_min": 8, "risk": "HIGH"},
-                {"step": 6, "action": "Add query timeout enforcement (30s max) to prevent future blocks", "type": "MUTATING", "estimated_time_min": 10, "risk": "MED"},
+                {"step": 1, "action": "Query postgres for active connections: SELECT * FROM pg_stat_activity", "type": "READ_ONLY",  "estimated_time_min": 2,  "risk": "LOW", "depends_on": []},
+                {"step": 2, "action": "Identify long-running query (pid: 2341) blocking pool",                 "type": "READ_ONLY",  "estimated_time_min": 3,  "risk": "LOW", "depends_on": []},
+                {"step": 3, "action": "Kill blocking query: SELECT pg_terminate_backend(2341)",                "type": "MUTATING",   "estimated_time_min": 1,  "risk": "MED", "depends_on": []},
+                {"step": 4, "action": "Increase HikariCP pool size from 50 to 100 in payment-svc config",     "type": "MUTATING",   "estimated_time_min": 5,  "risk": "MED", "depends_on": [3]},
+                {"step": 5, "action": "Deploy updated payment-svc with new pool config",                      "type": "MUTATING",   "estimated_time_min": 8,  "risk": "HIGH","depends_on": [4]},
+                {"step": 6, "action": "Add query timeout enforcement (30s max) to prevent future blocks",     "type": "MUTATING",   "estimated_time_min": 10, "risk": "MED", "depends_on": []},
             ]
         }
-    elif "Packet Loss" in title:
+
+    if "Packet Loss" in title:
         return {
             "plan": [
-                {"step": 1, "action": "Check VPC flow logs for packet loss metrics in AZ-b", "type": "READ_ONLY", "estimated_time_min": 3, "risk": "LOW"},
-                {"step": 2, "action": "Verify target group health: 0/3 healthy in tg-api-az-b", "type": "READ_ONLY", "estimated_time_min": 2, "risk": "LOW"},
-                {"step": 3, "action": "Reroute ALB traffic away from AZ-b to AZ-a/c", "type": "MUTATING", "estimated_time_min": 5, "risk": "HIGH"},
-                {"step": 4, "action": "Scale RDS read replicas in AZ-a and AZ-c", "type": "MUTATING", "estimated_time_min": 10, "risk": "MED"},
-                {"step": 5, "action": "Update Lambda VPC config to pin to AZ-a/c subnets", "type": "MUTATING", "estimated_time_min": 7, "risk": "MED"},
-                {"step": 6, "action": "Open AWS support ticket for AZ-b network investigation", "type": "READ_ONLY", "estimated_time_min": 5, "risk": "LOW"},
+                {"step": 1, "action": "Check VPC flow logs for packet loss metrics in AZ-b",          "type": "READ_ONLY", "estimated_time_min": 3,  "risk": "LOW",  "depends_on": []},
+                {"step": 2, "action": "Verify target group health: 0/3 healthy in tg-api-az-b",       "type": "READ_ONLY", "estimated_time_min": 2,  "risk": "LOW",  "depends_on": []},
+                {"step": 3, "action": "Reroute ALB traffic away from AZ-b to AZ-a/c",                 "type": "MUTATING",  "estimated_time_min": 5,  "risk": "HIGH", "depends_on": []},
+                {"step": 4, "action": "Scale RDS read replicas in AZ-a and AZ-c",                     "type": "MUTATING",  "estimated_time_min": 10, "risk": "MED",  "depends_on": [3]},
+                {"step": 5, "action": "Update Lambda VPC config to pin to AZ-a/c subnets",            "type": "MUTATING",  "estimated_time_min": 7,  "risk": "MED",  "depends_on": [3]},
+                {"step": 6, "action": "Open AWS support ticket for AZ-b network investigation",       "type": "READ_ONLY", "estimated_time_min": 5,  "risk": "LOW",  "depends_on": []},
             ]
         }
-    else:  # OOM
-        return {
-            "plan": [
-                {"step": 1, "action": "Check auth-svc pod status: kubectl get pods -l app=auth-svc", "type": "READ_ONLY", "estimated_time_min": 1, "risk": "LOW"},
-                {"step": 2, "action": "Review OOM events: kubectl describe pod auth-svc-7d9f", "type": "READ_ONLY", "estimated_time_min": 2, "risk": "LOW"},
-                {"step": 3, "action": "Increase auth-svc memory limit from 512Mi to 1Gi in deployment.yaml", "type": "MUTATING", "estimated_time_min": 3, "risk": "MED"},
-                {"step": 4, "action": "Apply updated deployment: kubectl apply -f auth-svc-deployment.yaml", "type": "MUTATING", "estimated_time_min": 5, "risk": "HIGH"},
-                {"step": 5, "action": "Enable heap dump on OOM: -XX:+HeapDumpOnOutOfMemoryError", "type": "MUTATING", "estimated_time_min": 4, "risk": "LOW"},
-                {"step": 6, "action": "Monitor pod restart count for next 10 minutes", "type": "READ_ONLY", "estimated_time_min": 10, "risk": "LOW"},
-            ]
-        }
+
+    # OOM / CrashLoop
+    return {
+        "plan": [
+            {"step": 1, "action": "Check auth-svc pod status: kubectl get pods -l app=auth-svc",          "type": "READ_ONLY", "estimated_time_min": 1,  "risk": "LOW", "depends_on": []},
+            {"step": 2, "action": "Review OOM events: kubectl describe pod auth-svc-7d9f",                "type": "READ_ONLY", "estimated_time_min": 2,  "risk": "LOW", "depends_on": []},
+            {"step": 3, "action": "Increase auth-svc memory limit from 512Mi to 1Gi in deployment.yaml",  "type": "MUTATING",  "estimated_time_min": 3,  "risk": "MED", "depends_on": []},
+            {"step": 4, "action": "Apply updated deployment: kubectl apply -f auth-svc-deployment.yaml",  "type": "MUTATING",  "estimated_time_min": 5,  "risk": "HIGH","depends_on": [3]},
+            {"step": 5, "action": "Enable heap dump on OOM: -XX:+HeapDumpOnOutOfMemoryError",             "type": "MUTATING",  "estimated_time_min": 4,  "risk": "LOW", "depends_on": []},
+            {"step": 6, "action": "Monitor pod restart count for next 10 minutes",                        "type": "READ_ONLY", "estimated_time_min": 10, "risk": "LOW", "depends_on": []},
+        ]
+    }
 
 def display(source: str, reasoning_result: dict, plan_result: dict):
     console.print(Panel(
