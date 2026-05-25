@@ -12,7 +12,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+def _client():
+    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 console = Console()
 
 PLAN_PROMPT = """You are an SRE planner. Given this incident analysis, generate a detailed remediation plan.
@@ -44,7 +45,7 @@ def plan(reasoning_result: dict) -> dict:
     if os.getenv("MOCK_GEMINI") == "1":
         return mock_plan(reasoning_result)
     
-    response = client.models.generate_content(
+    response = _client().models.generate_content(
         model="gemini-2.0-flash",
         contents=PLAN_PROMPT.format(
             title=reasoning_result["incident_title"],

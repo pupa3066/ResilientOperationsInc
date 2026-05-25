@@ -20,6 +20,7 @@ from rich import box
 from agents.detection_agent import DetectionAgent
 from agents.reasoning_agent import ReasoningAgent
 from agents.action_agent import ActionAgent
+from agents.knowledge_agent import KnowledgeAgent
 from observation.log_reader import load_signals
 
 console = Console()
@@ -35,6 +36,7 @@ def run():
 
     detection = DetectionAgent()
     reasoning = ReasoningAgent()
+    knowledge = KnowledgeAgent()
     action    = ActionAgent()
 
     # Edge case 4: track already-processed sources to avoid re-running
@@ -67,6 +69,24 @@ def run():
                     )
 
             result  = reasoning.run(signal)
+            kb      = knowledge.run(result)
+
+            # Print RFC + runbook context
+            if kb.get("relevant_rfcs"):
+                console.print(f"\n[bold blue]📚 Relevant RFCs:[/bold blue]")
+                for rfc in kb["relevant_rfcs"][:3]:
+                    console.print(f"  • {rfc['id']} — {rfc['title']}")
+            if kb.get("similar_incidents"):
+                console.print(f"\n[bold blue]🔍 Similar Past Incidents:[/bold blue]")
+                for inc in kb["similar_incidents"]:
+                    console.print(f"  • [{inc['id']}] {inc['title']} (MTTR: {inc['mttr_min']}min)")
+                    console.print(f"    Resolution: {inc['resolution']}")
+            if kb.get("recommended_approach"):
+                console.print(f"\n[bold green]💡 Recommended Approach:[/bold green]")
+                for line in kb["recommended_approach"].splitlines():
+                    console.print(f"  {line}")
+            console.print()
+
             summary = action.run(signal, result)
 
         # Edge case 4: re-check for new incidents that arrived during remediation
