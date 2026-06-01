@@ -245,13 +245,93 @@ DETECTED → ANALYZING → PLANNING → PENDING_APPROVAL → EXECUTING → RESOL
 
 ---
 
-## 🚀 What's Next
+## 🛡️ Production Hardening — Edge Cases
+
+ResilienceOps handles the failure modes that break naive incident response systems:
+
+| Edge Case | Problem | Solution |
+|---|---|---|
+| **False positive** | Single transient error triggers full pipeline | `MIN_SIGNALS=5` threshold + 60s cooldown in DetectionAgent |
+| **Unknown incident type** | Unrecognized pattern falls through to wrong handler | Evidence-based keyword scoring; returns UNKNOWN + safe plan if confidence < 2 |
+| **HITL rejection cascade** | Rejecting step 3 doesn't block dependent steps 4, 5 | `depends_on` graph in every plan step; ActionAgent blocks downstream automatically |
+| **Cascading incidents** | Two root causes on shared services generate conflicting plans | Cross-reference services across incidents; warn operator of cascade candidates |
+| **Incident during remediation** | New failures arrive while fix is running, get ignored | Post-remediation re-check loop; cooldown prevents re-firing same source |
+| **Empty/malformed logs** | Missing or corrupt log files crash the pipeline | Graceful skip with warnings; regex non-matches silently ignored |
+
+---
+
+## 🚀 Quick Start
+
+```bash
+git clone https://github.com/pupa3066/ResilientOperationsInc.git
+cd ResilientOperationsInc
+python3 -m venv .venv && source .venv/bin/activate
+pip install rich google-genai
+
+# Generate incident logs
+cd incident_simulator
+echo "1" | python3 log_generator.py
+echo "2" | python3 log_generator.py
+echo "3" | python3 log_generator.py
+cd ..
+
+# Run full multi-agent pipeline (mock mode)
+MOCK_GEMINI=1 GEMINI_API_KEY=x AUTO_APPROVE=1 python agent_main.py
+
+# Run with real Gemini API
+GEMINI_API_KEY=your_key AUTO_APPROVE=1 python agent_main.py
+```
+
+---
 
 - Multi-agent architecture (separate detection, reasoning, execution roles)
 - Historical incident learning for improved root-cause accuracy
 - Real-time dashboard for live incident visualization
 - Expanded integrations: Kubernetes, cloud providers, CI/CD systems
 - Replay mode to simulate past outages for training and evaluation
+
+---
+
+## 🤖 Multi-Agent Architecture
+
+```
+DetectionAgent → ReasoningAgent → ActionAgent
+```
+
+| Agent | Owns | Output |
+|---|---|---|
+| **DetectionAgent** | Log ingestion, anomaly threshold, cooldown | Fired incident signals |
+| **ReasoningAgent** | Gemini root cause, hypothesis tree, blast radius | Reasoning result with confidence % |
+| **ActionAgent** | Plan execution, HITL gate, dependency graph, audit log | Resolution summary |
+
+---
+
+## 📁 Project Structure
+
+```
+ResilientOperationsInc/
+├── agent_main.py              ← multi-agent entry point
+├── main.py                    ← monolithic entry point (Day 1)
+├── agents/
+│   ├── detection_agent.py     ← threshold + cooldown + cascade detection
+│   ├── reasoning_agent.py     ← Gemini root cause analysis
+│   └── action_agent.py        ← plan execution + HITL + dependency graph
+├── observation/
+│   ├── log_reader.py          ← log ingestion + cascade cross-reference
+│   ├── observe.py             ← anomaly detection display
+│   └── seed_data.py           ← built-in SRE incident data
+├── reasoning/
+│   └── reason.py              ← evidence-based classifier + Gemini prompt
+├── planner/
+│   └── plan.py                ← remediation plan with depends_on graph
+├── hitl/
+│   ├── controller.py          ← HITL approval gate
+│   └── audit_log.jsonl        ← immutable decision audit trail
+├── incident_simulator/
+│   ├── log_generator.py       ← generates realistic incident logs
+│   └── logs/                  ← incident-1/2/3.log
+└── everyday_work_log/         ← daily build logs with reasoning
+```
 
 ---
 

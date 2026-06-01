@@ -13,19 +13,30 @@ Endpoints:
   GET  /incidents/{id}/report      — get the auto-generated incident report
 """
 import os, uuid, asyncio, json
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Literal
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from agents.detection_agent import DetectionAgent
 from agents.reasoning_agent import ReasoningAgent
 from agents.knowledge_agent import KnowledgeAgent
-from planner.plan import mock_plan
+from planner.plan import mock_plan, plan as gemini_plan
 from reports.generator import generate_report
 from observation.elastic_mcp import ElasticMCP
 
-app = FastAPI(title="ResilienceOps API", version="0.4.0")
+app = FastAPI(title="ResilienceOps API", version="0.5.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+_DASHBOARD = Path(__file__).parent / "dashboard.html"
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard():
+    return _DASHBOARD.read_text()
 
 # In-memory store (replace with DB for production)
 _incidents: dict[str, dict] = {}
@@ -144,7 +155,13 @@ async def run_pipeline():
     for signal in signals:
         reasoning = reasoning_agent.run(signal)
         knowledge = knowledge_agent.run(reasoning)
-        plan = mock_plan(reasoning) if os.getenv("MOCK_GEMINI") == "1" else mock_plan(reasoning)
+        if os.getenv("MOCK_GEMINI") == "1":
+            plan = mock_plan(reasoning)
+        else:
+            try:
+                plan = gemini_plan(reasoning)
+            except Exception:
+                plan = mock_plan(reasoning)
         incident = _build_incident(signal, reasoning, plan, knowledge)
         incident = _apply_decisions(incident)
         _incidents[incident["id"]] = incident
@@ -312,3 +329,13 @@ async def incident_ws(inc_id: str, websocket: WebSocket):
             await asyncio.sleep(30)  # keep-alive; events are pushed via _emit
     except WebSocketDisconnect:
         _subscribers[inc_id].remove(websocket)
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "elastic_mcp": ElasticMCP().health(),
+        "gemini": "live" if os.getenv("MOCK_GEMINI") != "1" and os.getenv("GEMINI_API_KEY") else "mock",
+        "incidents_count": len(_incidents),
+    }

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ResilienceOps — Incident Dashboard</title>
+<style>
+:root { --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a; --text: #e4e4e7; --dim: #71717a; --green: #22c55e; --red: #ef4444; --yellow: #eab308; --blue: #3b82f6; --purple: #a855f7; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+header { padding: 1rem 2rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+header h1 { font-size: 1.2rem; font-weight: 600; }
+header h1 span { color: var(--blue); }
+.status-bar { display: flex; gap: 1rem; font-size: 0.8rem; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+.status-dot.ok { background: var(--green); }
+.status-dot.warn { background: var(--yellow); }
+.status-dot.err { background: var(--red); }
+main { padding: 2rem; max-width: 1400px; margin: 0 auto; }
+.controls { margin-bottom: 1.5rem; display: flex; gap: 0.75rem; }
+button { background: var(--blue); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 500; }
+button:hover { opacity: 0.9; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.secondary { background: var(--border); }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem; }
+.card h2 { font-size: 0.9rem; color: var(--dim); margin-bottom: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.incident { padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem; cursor: pointer; transition: border-color 0.2s; }
+.incident:hover { border-color: var(--blue); }
+.incident .title { font-weight: 600; font-size: 0.9rem; }
+.incident .meta { font-size: 0.75rem; color: var(--dim); margin-top: 0.25rem; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
+.badge.pending { background: #422006; color: var(--yellow); }
+.badge.resolved { background: #052e16; color: var(--green); }
+.badge.partial { background: #1c1917; color: var(--yellow); }
+.detail-panel { grid-column: 1 / -1; }
+.steps-list { list-style: none; }
+.steps-list li { padding: 0.6rem 0.75rem; border-left: 3px solid var(--border); margin-bottom: 0.4rem; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between; }
+.steps-list li.auto { border-color: var(--green); }
+.steps-list li.approve { border-color: var(--green); }
+.steps-list li.reject { border-color: var(--red); opacity: 0.6; }
+.steps-list li.blocked { border-color: var(--dim); opacity: 0.4; }
+.steps-list li.pending { border-color: var(--yellow); }
+.step-actions { display: flex; gap: 0.4rem; }
+.step-actions button { padding: 0.25rem 0.6rem; font-size: 0.75rem; border-radius: 4px; }
+.btn-approve { background: var(--green); }
+.btn-reject { background: var(--red); }
+.event-log { max-height: 300px; overflow-y: auto; font-family: 'SF Mono', monospace; font-size: 0.75rem; }
+.event-log .entry { padding: 0.3rem 0; border-bottom: 1px solid var(--border); color: var(--dim); }
+.event-log .entry .ev-name { color: var(--purple); font-weight: 600; }
+.hypothesis { margin: 0.5rem 0; padding: 0.4rem 0.6rem; border-radius: 4px; font-size: 0.8rem; background: rgba(255,255,255,0.03); }
+.hypothesis .priority { font-weight: 700; margin-right: 0.5rem; }
+.priority.HIGH { color: var(--red); }
+.priority.MED { color: var(--yellow); }
+.priority.LOW { color: var(--dim); }
+.empty { color: var(--dim); font-size: 0.85rem; padding: 2rem; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ <span>ResilienceOps</span> Incident Dashboard</h1>
+  <div class="status-bar">
+    <span><span class="status-dot" id="api-dot"></span>API</span>
+    <span><span class="status-dot" id="elastic-dot"></span>Elastic MCP</span>
+    <span><span class="status-dot" id="gemini-dot"></span>Gemini</span>
+  </div>
+</header>
+<main>
+  <div class="controls">
+    <button id="btn-run" onclick="runPipeline()">▶ Run Detection Pipeline</button>
+    <button class="secondary" onclick="refreshIncidents()">↻ Refresh</button>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h2>Incidents</h2>
+      <div id="incidents-list"><div class="empty">No incidents yet. Run the pipeline to detect.</div></div>
+    </div>
+    <div class="card">
+      <h2>Live Events</h2>
+      <div class="event-log" id="event-log"><div class="empty">Connect to an incident to see live events.</div></div>
+    </div>
+    <div class="card detail-panel" id="detail-panel" style="display:none">
+      <h2>Incident Detail</h2>
+      <div id="detail-content"></div>
+    </div>
+  </div>
+</main>
+<script>
+const API = location.origin;
+const WS_BASE = `ws://${location.host}`;
+let ws = null;
+let selectedId = null;
+
+async function checkHealth() {
+  try {
+    const r = await fetch(`${API}/health`);
+    const d = await r.json();
+    setDot('api-dot', 'ok');
+    setDot('elastic-dot', d.elastic_mcp?.status === 'ok' ? 'ok' : d.elastic_mcp?.status === 'stub' ? 'warn' : 'err');
+    setDot('gemini-dot', d.gemini === 'live' ? 'ok' : 'warn');
+  } catch { setDot('api-dot', 'err'); }
+}
+
+function setDot(id, state) { document.getElementById(id).className = `status-dot ${state}`; }
+
+async function runPipeline() {
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true; btn.textContent = '⏳ Running...';
+  try {
+    const r = await fetch(`${API}/incidents/run`, { method: 'POST' });
+    const d = await r.json();
+    if (d.incidents?.length) {
+      addLog('pipeline', `Detected ${d.incidents.length} incident(s)`);
+      refreshIncidents();
+      selectIncident(d.incidents[0].id);
+    } else { addLog('pipeline', 'No incidents detected'); }
+  } catch (e) { addLog('error', e.message); }
+  btn.disabled = false; btn.textContent = '▶ Run Detection Pipeline';
+}
+
+async function refreshIncidents() {
+  try {
+    const r = await fetch(`${API}/incidents`);
+    const list = await r.json();
+    const el = document.getElementById('incidents-list');
+    if (!list.length) { el.innerHTML = '<div class="empty">No incidents yet.</div>'; return; }
+    el.innerHTML = list.map(i => `
+      <div class="incident" onclick="selectIncident('${i.id}')">
+        <div class="title">${i.title || i.source}</div>
+        <div class="meta">${i.id} · ${badgeHTML(i.status)} · ${new Date(i.created_at).toLocaleTimeString()}</div>
+      </div>`).join('');
+  } catch {}
+}
+
+function badgeHTML(status) {
+  const cls = status === 'RESOLVED' ? 'resolved' : status === 'PARTIALLY_RESOLVED' ? 'partial' : 'pending';
+  return `<span class="badge ${cls}">${status}</span>`;
+}
+
+async function selectIncident(id) {
+  selectedId = id;
+  if (ws) { ws.close(); ws = null; }
+  const panel = document.getElementById('detail-panel');
+  panel.style.display = 'block';
+  try {
+    const r = await fetch(`${API}/incidents/${id}`);
+    const inc = await r.json();
+    renderDetail(inc);
+    connectWS(id);
+  } catch (e) { addLog('error', e.message); }
+}
+
+function renderDetail(inc) {
+  const el = document.getElementById('detail-content');
+  el.innerHTML = `
+    <div style="margin-bottom:1rem">
+      <strong style="font-size:1.1rem">${inc.title || 'Unknown'}</strong>
+      <span style="margin-left:0.5rem">${badgeHTML(inc.status)}</span>
+      <div style="color:var(--dim);font-size:0.8rem;margin-top:0.25rem">
+        ${inc.id} · Confidence: ${inc.confidence_pct}% · Blast: ${(inc.blast_radius||[]).join(', ')}
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.85rem"><strong>Root Cause:</strong> ${inc.root_cause || 'N/A'}</div>
+    </div>
+    <h3 style="font-size:0.85rem;color:var(--dim);margin-bottom:0.5rem">REMEDIATION STEPS</h3>
+    <ul class="steps-list">
+      ${inc.steps.map(s => `
+        <li class="${s.decision}">
+          <span><strong>${s.step}.</strong> ${s.action} <span class="badge ${s.type === 'MUTATING' ? 'pending' : 'resolved'}">${s.type}</span></span>
+          ${s.decision === 'pending' && s.type === 'MUTATING' ? `
+            <span class="step-actions">
+              <button class="btn-approve" onclick="decide('${inc.id}',${s.step},'approve')">✓</button>
+              <button class="btn-reject" onclick="decide('${inc.id}',${s.step},'reject')">✗</button>
+            </span>` : `<span class="badge ${s.decision === 'auto' || s.decision === 'approve' ? 'resolved' : s.decision === 'reject' ? '' : ''}">${s.decision}</span>`}
+        </li>`).join('')}
+    </ul>`;
+}
+
+async function decide(incId, step, decision) {
+  try {
+    const r = await fetch(`${API}/incidents/${incId}/approve`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ step, decision })
+    });
+    const d = await r.json();
+    addLog(decision, `Step ${step} → ${decision}`);
+    selectIncident(incId);
+  } catch (e) { addLog('error', e.message); }
+}
+
+function connectWS(id) {
+  ws = new WebSocket(`${WS_BASE}/incidents/${id}/ws`);
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    addLog(msg.event, JSON.stringify(msg.data));
+    if (['step_approved','step_rejected','step_blocked','resolved','status_changed'].includes(msg.event)) {
+      selectIncident(id);
+    }
+  };
+  ws.onclose = () => addLog('ws', 'disconnected');
+}
+
+function addLog(event, text) {
+  const el = document.getElementById('event-log');
+  if (el.querySelector('.empty')) el.innerHTML = '';
+  const entry = document.createElement('div');
+  entry.className = 'entry';
+  entry.innerHTML = `<span class="ev-name">${event}</span> ${text}`;
+  el.prepend(entry);
+  if (el.children.length > 100) el.lastChild.remove();
+}
+
+checkHealth();
+setInterval(checkHealth, 15000);
+</script>
+</body>
+</html>

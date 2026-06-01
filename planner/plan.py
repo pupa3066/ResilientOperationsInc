@@ -54,7 +54,11 @@ def plan(reasoning_result: dict) -> dict:
         ),
         config={"response_mime_type": "application/json"}
     )
-    return json.loads(response.text)
+    result = json.loads(response.text)
+    # Normalize: ensure every step has depends_on
+    for step in result.get("plan", []):
+        step.setdefault("depends_on", [])
+    return result
 
 def mock_plan(reasoning_result: dict) -> dict:
     """
