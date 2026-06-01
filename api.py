@@ -29,6 +29,10 @@ from reports.generator import generate_report
 from observation.elastic_mcp import ElasticMCP
 from observation.k8s import K8sObserver
 import history
+import alerting
+import runbook
+import watcher
+from timeline import Timeline
 
 app = FastAPI(title="ResilienceOps API", version="0.5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -78,7 +82,19 @@ def _now() -> str:
 def _build_incident(signal: dict, reasoning: dict, plan: dict, knowledge: dict) -> dict:
     inc_id = str(uuid.uuid4())[:8]
     steps = plan["plan"]
-    return {
+
+    # Create timeline
+    tl = Timeline(inc_id)
+    tl.detected(signal["source"], signal.get("signal_count", 0))
+    tl.reasoning_complete(
+        reasoning.get("incident_title", "Unknown"),
+        reasoning.get("confidence_pct", 0),
+        reasoning.get("root_cause", ""),
+    )
+    mutating_count = sum(1 for s in steps if s["type"] == "MUTATING")
+    tl.plan_generated(len(steps), mutating_count)
+
+    incident = {
         "id": inc_id,
         "source": signal["source"],
         "status": "PENDING_APPROVAL",
@@ -89,15 +105,26 @@ def _build_incident(signal: dict, reasoning: dict, plan: dict, knowledge: dict) 
         "knowledge": knowledge,
         "steps": steps,
         "decisions": {},
+        "runbook_results": {},
         "elastic_context": ElasticMCP().query(signal),
         "k8s_context": K8sObserver().query(signal.get("services", [])),
+        "timeline": tl,
     }
+
+    # Alert based on severity
+    alert_record = alerting.alert(incident)
+    incident["alert"] = alert_record
+    tl.escalated(alert_record["severity"], alert_record["routing"]["channels"])
+
+    return incident
 
 
 def _apply_decisions(incident: dict) -> dict:
     """Execute all approved/auto steps, block dependents of rejected steps."""
     steps = incident["steps"]
     decisions = incident["decisions"]
+    tl: Timeline = incident.get("timeline")
+    incident_type = incident["reasoning"].get("incident_type")
     rejected: set[int] = {int(k) for k, v in decisions.items() if v in ("reject", "blocked")}
 
     approved = rejected_count = blocked = 0
@@ -116,9 +143,13 @@ def _apply_decisions(incident: dict) -> dict:
                 blocked += 1
             continue
 
-        # Auto-execute READ_ONLY
+        # Auto-execute READ_ONLY with runbook
         if step["type"] == "READ_ONLY":
+            result = runbook.execute_step(step, incident_type)
+            incident["runbook_results"][str(n)] = result
             decisions[str(n)] = "auto"
+            if tl:
+                tl.step_auto_executed(n, step["action"], result)
             approved += 1
             continue
 
@@ -127,17 +158,23 @@ def _apply_decisions(incident: dict) -> dict:
         if blocker:
             decisions[str(n)] = "blocked"
             rejected.add(n)
+            if tl:
+                tl.step_blocked(n, blocker)
             blocked += 1
             continue
 
         # Still awaiting human decision
         incident["status"] = "PENDING_APPROVAL"
+        if tl:
+            tl.step_awaiting_approval(n, step["action"], step.get("risk", "MED"))
         return incident
 
     # All steps resolved
     incident["status"] = "RESOLVED" if rejected_count == 0 and blocked == 0 else "PARTIALLY_RESOLVED"
     incident["summary"] = {"approved": approved, "rejected": rejected_count, "blocked": blocked}
     incident["updated_at"] = _now()
+    if tl:
+        tl.resolved(incident["status"])
     return incident
 
 
@@ -215,6 +252,9 @@ def get_incident(inc_id: str):
         ],
         "elastic_context": inc.get("elastic_context"),
         "k8s_context": inc.get("k8s_context"),
+        "runbook_results": inc.get("runbook_results", {}),
+        "alert": inc.get("alert"),
+        "timeline": inc["timeline"].to_dict() if inc.get("timeline") else None,
         "summary": inc.get("summary"),
     }
 
@@ -239,6 +279,14 @@ async def approve_step(inc_id: str, body: ApprovalRequest):
 
     inc["decisions"][str(body.step)] = body.decision
     inc["updated_at"] = _now()
+
+    # Track in timeline
+    tl: Timeline = inc.get("timeline")
+    if tl:
+        if body.decision == "approve":
+            tl.step_approved(body.step, step["action"])
+        else:
+            tl.step_rejected(body.step, step["action"])
 
     event = "step_approved" if body.decision == "approve" else "step_rejected"
     await _emit(inc_id, event, {"step": body.step, "action": step["action"], "risk": step["risk"]})
@@ -454,3 +502,57 @@ def replay_all():
             "accuracy_pct": round(passed / (passed + failed) * 100, 1) if (passed + failed) > 0 else None,
         },
     }
+
+
+# ── Watcher ───────────────────────────────────────────────────────────────────
+
+@app.post("/watcher/start")
+async def start_watcher():
+    """Start the real-time log watcher as a background task."""
+    if watcher._running:
+        return {"status": "already_running"}
+
+    async def _on_change(changes):
+        # Auto-trigger pipeline on new/modified logs
+        for c in changes:
+            await _emit("global", "log_change", c)
+
+    watcher.on_change(_on_change)
+    asyncio.create_task(watcher.watch_loop(interval=2.0))
+    return {"status": "started", "interval": 2.0}
+
+
+@app.post("/watcher/stop")
+def stop_watcher():
+    watcher.stop()
+    return {"status": "stopped"}
+
+
+@app.get("/watcher/status")
+def watcher_status():
+    return watcher.status()
+
+
+# ── Alerting ──────────────────────────────────────────────────────────────────
+
+@app.get("/alerts")
+def get_alerts():
+    return alerting.get_alerts()
+
+
+@app.get("/alerts/escalations")
+def get_escalations():
+    return alerting.pending_escalations()
+
+
+# ── Timeline ──────────────────────────────────────────────────────────────────
+
+@app.get("/incidents/{inc_id}/timeline")
+def get_timeline(inc_id: str):
+    inc = _incidents.get(inc_id)
+    if not inc:
+        raise HTTPException(404, "Incident not found")
+    tl = inc.get("timeline")
+    if not tl:
+        return {"events": []}
+    return tl.to_dict()
