@@ -27,6 +27,8 @@ from agents.knowledge_agent import KnowledgeAgent
 from planner.plan import mock_plan, plan as gemini_plan
 from reports.generator import generate_report
 from observation.elastic_mcp import ElasticMCP
+from observation.k8s import K8sObserver
+import history
 
 app = FastAPI(title="ResilienceOps API", version="0.5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -88,6 +90,7 @@ def _build_incident(signal: dict, reasoning: dict, plan: dict, knowledge: dict) 
         "steps": steps,
         "decisions": {},
         "elastic_context": ElasticMCP().query(signal),
+        "k8s_context": K8sObserver().query(signal.get("services", [])),
     }
 
 
@@ -155,6 +158,8 @@ async def run_pipeline():
     for signal in signals:
         reasoning = reasoning_agent.run(signal)
         knowledge = knowledge_agent.run(reasoning)
+        # Enrich with historical incident matches
+        knowledge["historical_matches"] = history.find_similar(reasoning)
         if os.getenv("MOCK_GEMINI") == "1":
             plan = mock_plan(reasoning)
         else:
@@ -209,6 +214,7 @@ def get_incident(inc_id: str):
             for s in inc["steps"]
         ],
         "elastic_context": inc.get("elastic_context"),
+        "k8s_context": inc.get("k8s_context"),
         "summary": inc.get("summary"),
     }
 
@@ -258,6 +264,7 @@ async def approve_step(inc_id: str, body: ApprovalRequest):
 
     if inc["status"] in ("RESOLVED", "PARTIALLY_RESOLVED"):
         await _emit(inc_id, "resolved", {"status": inc["status"], "summary": inc.get("summary")})
+        history.save(inc)
 
     return {
         "id": inc_id,
@@ -336,6 +343,114 @@ def health():
     return {
         "status": "ok",
         "elastic_mcp": ElasticMCP().health(),
+        "k8s": K8sObserver().health(),
         "gemini": "live" if os.getenv("MOCK_GEMINI") != "1" and os.getenv("GEMINI_API_KEY") else "mock",
         "incidents_count": len(_incidents),
+        "history": history.stats(),
+    }
+
+
+@app.get("/history")
+def get_history():
+    return history.load_all()
+
+
+@app.get("/history/stats")
+def get_history_stats():
+    return history.stats()
+
+
+@app.get("/k8s/{service}")
+def get_k8s_status(service: str):
+    """Query Kubernetes status for a specific service."""
+    return K8sObserver().query([service])
+
+
+# ── Replay Mode ───────────────────────────────────────────────────────────────
+
+@app.post("/replay/{log_name}")
+def replay_incident(log_name: str):
+    """
+    Re-run a specific incident log through the reasoning pipeline.
+    Compares AI diagnosis against known root cause (if in history).
+    Useful for training, evaluation, and regression testing.
+    """
+    from observation.log_reader import parse_log, LOG_DIR
+
+    log_path = LOG_DIR / log_name
+    if not log_path.exists():
+        raise HTTPException(404, f"Log file not found: {log_name}")
+
+    entries = parse_log(log_path)
+    if not entries:
+        raise HTTPException(400, f"Log file empty or unparseable: {log_name}")
+
+    errors = [e for e in entries if e["level"] in ("ERROR", "CRITICAL")]
+    signal = {
+        "id": log_path.stem.upper().replace("-", "_"),
+        "source": log_name,
+        "logs": entries,
+        "error_logs": errors,
+        "services": list(dict.fromkeys(e["service"] for e in errors)),
+        "signal_count": len(errors),
+        "cascade_candidates": [],
+    }
+
+    # Run reasoning
+    reasoning_agent = ReasoningAgent()
+    reasoning = reasoning_agent.run(signal)
+
+    # Check history for known ground truth
+    past = [h for h in history.load_all() if h.get("source") == log_name]
+    ground_truth = past[-1] if past else None
+
+    # Score accuracy
+    evaluation = {"log": log_name, "reasoning": reasoning}
+    if ground_truth:
+        type_match = reasoning.get("incident_type") == ground_truth.get("incident_type")
+        evaluation["ground_truth"] = {
+            "incident_type": ground_truth.get("incident_type"),
+            "root_cause": ground_truth.get("root_cause"),
+            "title": ground_truth.get("title"),
+        }
+        evaluation["accuracy"] = {
+            "type_match": type_match,
+            "confidence_pct": reasoning.get("confidence_pct", 0),
+            "score": "PASS" if type_match and reasoning.get("confidence_pct", 0) >= 70 else "FAIL",
+        }
+    else:
+        evaluation["ground_truth"] = None
+        evaluation["accuracy"] = {"note": "No historical ground truth available for comparison"}
+
+    return evaluation
+
+
+@app.post("/replay")
+def replay_all():
+    """Replay all available incident logs and return accuracy summary."""
+    from observation.log_reader import LOG_DIR
+
+    log_files = sorted(LOG_DIR.glob("incident-*.log"))
+    if not log_files:
+        return {"results": [], "summary": {"total": 0}}
+
+    from fastapi.testclient import TestClient
+    results = []
+    for log_file in log_files:
+        result = replay_incident(log_file.name)
+        results.append(result)
+
+    passed = sum(1 for r in results if r.get("accuracy", {}).get("score") == "PASS")
+    failed = sum(1 for r in results if r.get("accuracy", {}).get("score") == "FAIL")
+    no_truth = sum(1 for r in results if r.get("ground_truth") is None)
+
+    return {
+        "results": results,
+        "summary": {
+            "total": len(results),
+            "passed": passed,
+            "failed": failed,
+            "no_ground_truth": no_truth,
+            "accuracy_pct": round(passed / (passed + failed) * 100, 1) if (passed + failed) > 0 else None,
+        },
     }
